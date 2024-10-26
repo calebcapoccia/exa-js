@@ -13,8 +13,8 @@ const isBeta = false;
  * @property {string} [startPublishedDate] - Start date for results based on published date.
  * @property {string} [endPublishedDate] - End date for results based on published date.
  * @property {boolean} [useAutoprompt] - If true, converts query to a Metaphor query.
- * @property {string} [type] - Type of search, 'keyword' or 'neural'.
- * @property {string} [category] - A data category to focus on, with higher comprehensivity and data cleanliness. Currently, the only category is company.
+ * @property {string} [type] - Type of search, 'keyword', 'neural', or 'auto'.
+ * @property {string} [category] - A data category to focus on, with higher comprehensivity and data cleanliness.
  * @property {string[]} [includeText] - List of strings that must be present in webpage text of results. Currently only supports 1 string of up to 5 words.
  * @property {string[]} [excludeText] - List of strings that must not be present in webpage text of results. Currently only supports 1 string of up to 5 words.
  */
@@ -51,7 +51,7 @@ export type RegularSearchOptions = BaseSearchOptions & {
  * @property {string} [startPublishedDate] - Start date for results based on published date.
  * @property {string} [endPublishedDate] - End date for results based on published date.
  * @property {boolean} [excludeSourceDomain] - If true, excludes links from the base domain of the input.
- * @property {string} [category] - A data category to focus on, with higher comprehensivity and data cleanliness. Currently, the only category is company.
+ * @property {string} [category] - A data category to focus on, with higher comprehensivity and data cleanliness.
  * @property {string[]} [includeText] - List of strings that must be present in webpage text of results. Currently only supports 1 string of up to 5 words.
  * @property {string[]} [excludeText] - List of strings that must not be present in webpage text of results. Currently only supports 1 string of up to 5 words.
  */
@@ -67,6 +67,9 @@ export type FindSimilarOptions = BaseSearchOptions & {
  * @property {SummaryContentsOptions | boolean} [summary] - Options for retrieving summary.
  * @property {LivecrawlOptions} [livecrawl] - Options for livecrawling contents. Default is "never" for neural/auto search, "fallback" for keyword search.
  * @property {number} [livecrawlTimeout] - The timeout for livecrawling. Max and default is 10000ms.
+ * @property {number} [subpages] - The number of subpages to crawl.
+ * @property {string | string[]} [subpageTarget] - The target subpage or subpages.
+ * @property {ExtrasOptions} [extras] - Additional options for extras.
  * @property {boolean} [filterEmptyResults] - If true, filters out results with no contents. Default is true.
  */
 export type ContentsOptions = {
@@ -75,6 +78,9 @@ export type ContentsOptions = {
   summary?: SummaryContentsOptions | true;
   livecrawl?: LivecrawlOptions;
   livecrawlTimeout?: number;
+  subpages?: number;
+  subpageTarget?: string | string[];
+  extras?: ExtrasOptions;
   filterEmptyResults?: boolean;
 } & (typeof isBeta extends true ? {} : {}); // FOR BETA OPTIONS
 
@@ -118,6 +124,15 @@ export type SummaryContentsOptions = {
 };
 
 /**
+ * Options for extras.
+ * @typedef {Object} ExtrasOptions
+ * @property {number} [links] - The number of links to return.
+ */
+export type ExtrasOptions = {
+  links?: number;
+};
+
+/**
  * @typedef {Object} TextResponse
  * @property {string} text - Text from page
  */
@@ -139,6 +154,12 @@ export type HighlightsResponse = {
  */
 export type SummaryResponse = { summary: string };
 
+/**
+ * @typedef {Object} ExtrasResponse
+ * @property {string[]} links - An array of links from the page.
+ */
+export type ExtrasResponse = { links: string[] };
+
 export type Default<T extends {}, U> = [keyof T] extends [never] ? U : T;
 
 /**
@@ -150,7 +171,8 @@ export type Default<T extends {}, U> = [keyof T] extends [never] ? U : T;
 export type ContentsResultComponent<T extends ContentsOptions> = Default<
   (T["text"] extends object | true ? TextResponse : {}) &
     (T["highlights"] extends object | true ? HighlightsResponse : {}) &
-    (T["summary"] extends object | true ? SummaryResponse : {}),
+    (T["summary"] extends object | true ? SummaryResponse : {}) &
+    (T["extras"] extends object ? ExtrasResponse : {}),
   TextResponse
 >;
 
@@ -163,6 +185,8 @@ export type ContentsResultComponent<T extends ContentsOptions> = Default<
  * @property {string} [author] - The author of the content, if available.
  * @property {number} [score] - Similarity score between the query/url and the result.
  * @property {string} id - The temporary ID for the document.
+ * @property {string} [image] - URL of an image associated with the search result, if available.
+ * @property {Result[]} [subpages] - Array of subpages for the search result.
  */
 export type SearchResult<T extends ContentsOptions = {}> = {
   title: string | null;
@@ -172,6 +196,7 @@ export type SearchResult<T extends ContentsOptions = {}> = {
   score?: number;
   id: string;
   image?: string;
+  subpages?: SearchResult<T>[];
 } & ContentsResultComponent<T>;
 
 /**
@@ -179,13 +204,11 @@ export type SearchResult<T extends ContentsOptions = {}> = {
  * @typedef {Object} SearchResponse
  * @property {Result[]} results - The list of search results.
  * @property {string} [autopromptString] - The autoprompt string, if applicable.
- * @property {string} [autoDate] - The autoprompt date, if applicable.
  * @property {string} requestId - The request ID for the search.
  */
 export type SearchResponse<T extends ContentsOptions = {}> = {
   results: SearchResult<T>[];
   autopromptString?: string;
-  autoDate?: string;
   requestId: string;
 };
 
@@ -269,11 +292,11 @@ class Exa {
     query: string,
     options?: RegularSearchOptions & T,
   ): Promise<SearchResponse<T>> {
-    const { text, highlights, summary, ...rest } = options || {};
+    const { text, highlights, summary, extras, ...rest } = options || {};
     return await this.request("/search", "POST", {
       query,
       contents:
-        !text && !highlights && !summary
+        !text && !highlights && !summary && !extras
           ? {
               text: true,
               ...options,
@@ -282,6 +305,7 @@ class Exa {
               ...(text ? { text } : {}),
               ...(highlights ? { highlights } : {}),
               ...(summary ? { summary } : {}),
+              ...(extras ? { extras } : {}),
               ...options,
             },
       ...rest,
@@ -311,11 +335,11 @@ class Exa {
     url: string,
     options?: FindSimilarOptions & T,
   ): Promise<SearchResponse<T>> {
-    const { text, highlights, summary, ...rest } = options || {};
+    const { text, highlights, summary, extras, ...rest } = options || {};
     return await this.request("/findSimilar", "POST", {
       url,
       contents:
-        !text && !highlights && !summary
+        !text && !highlights && !summary && !extras
           ? {
               text: true,
               livecrawl: options?.livecrawl,
@@ -328,6 +352,7 @@ class Exa {
               ...(text ? { text } : {}),
               ...(highlights ? { highlights } : {}),
               ...(summary ? { summary } : {}),
+              ...(extras ? { extras } : {}),
               ...options,
             },
       ...rest,
